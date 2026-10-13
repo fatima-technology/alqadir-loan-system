@@ -178,6 +178,7 @@ select option{background:var(--panel-solid)}
 .modal .acts{display:flex;justify-content:end;gap:8px;margin-top:16px}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel-solid);color:var(--ink);border:1px solid var(--cyan);box-shadow:0 0 20px rgba(61,225,255,.35);padding:10px 18px;border-radius:4px;font-weight:600;z-index:90;letter-spacing:.03em}
 .note{font-size:12px;color:var(--muted);margin-top:8px}
+.chk{display:flex;gap:10px;align-items:center;cursor:pointer;font-weight:600}.chk input{width:18px;height:18px;accent-color:var(--red)}
 .data-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
 .logo-prev{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .logo-prev .box{width:120px;height:60px;border:1px dashed var(--line-hi);border-radius:4px;display:flex;align-items:center;justify-content:center;background:#fff;color:#888;font-size:11px}
@@ -729,6 +730,10 @@ V.data=()=>{const own=isOwner();return head('Import / Export',own?'Backup, Excel
         <input type="file" id="plFile" accept="image/png,image/jpeg,image/svg+xml,image/webp">${db.settings.principalLogo?'<button class="btn sm ghost-bad" id="plDel">Remove</button>':''}</div>
         <div class="note">PNG or JPG, up to 300 KB. Shows in the sidebar and at the top right of every printed report.</div></div>
     </div></div>`:''}
+  ${own?`<div class="panel"><h2>Daily auto backup</h2>
+    <label class="chk"><input type="checkbox" id="abOn" ${abEnabled()?'checked':''}> Download a backup file automatically once a day on this device</label>
+    <div class="note">Last auto backup on this device: <b>${abLast()?fd(abLast()):'none yet'}</b>. The file is saved in your Downloads folder as <b>${esc(abName(today()))}</b>. It runs every day at 7:00 PM if the system is open, or the first time you open it after 7:00 PM.</div>
+    <div class="row" style="margin-top:10px"><button class="btn" id="abNow">Download backup now</button></div></div>`:''}
   <div class="panel"><h2>Account</h2>
     <div class="note" style="margin:0 0 12px">Signed in as <b>${esc(window.FB?FB.email():'')}</b>${own?' (owner)':` (staff of <b>${esc(db.settings.company)}</b>)`}. Data is saved online and is the same on every device where you sign in.</div>
     <button class="btn" onclick="signOutNow()">Sign out</button></div>
@@ -747,11 +752,32 @@ A.data=()=>{
     e.target.value=''};
   const ti=$('#tmEmail');if(ti)ti.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();addStaff()}};
   if(!isOwner())return;
+  $('#abOn').onchange=e=>{abSet('on',e.target.checked?'1':'0');toast(e.target.checked?'Daily auto backup is on':'Daily auto backup is off')};
+  $('#abNow').onclick=()=>{backupNow();render()};
   $('#sSave').onclick=()=>{Object.assign(db.settings,{company:$('#sC').value.trim()||'Al Qadir Traders',tagline:$('#sTg').value.trim(),owner:$('#sO').value.trim(),phone:$('#sPh').value.trim()});save();render();toast('Settings saved')};
   $('#plFile').onchange=e=>{const f=e.target.files[0];if(!f)return;if(f.size>300*1024){toast('Logo is too large. Use a file under 300 KB');e.target.value='';return}
     const r=new FileReader();r.onload=()=>{db.settings.principalLogo=r.result;save();render();toast('Logo saved')};r.readAsDataURL(f)};
   const pd=$('#plDel');if(pd)pd.onclick=()=>{db.settings.principalLogo='';save();render();toast('Logo removed')};
 };
+/* ---------- Daily auto backup (owner only, once a day per device) ---------- */
+const abKey=k=>'aq_autobk_'+k+'_'+((window.FB&&FB.email())||'').toLowerCase();
+function abGet(k){try{return localStorage.getItem(abKey(k))}catch(e){return null}}
+function abSet(k,v){try{localStorage.setItem(abKey(k),v)}catch(e){}}
+const AB_HOUR=19; /* 7 PM */
+const abEnabled=()=>abGet('on')!=='0';
+const abLast=()=>abGet('last')||'';
+const abName=d=>(db.settings.company||'Udhaar').replace(/[^\w]+/g,'-').replace(/^-|-$/g,'')+'-backup-'+d+'.json';
+function backupNow(){fileDownload(JSON.stringify(db,null,2),abName(today()),'application/octet-stream');abSet('last',today())}
+function autoBackup(){
+  if(!window.FB||!FB.ready||!isOwner()||!abEnabled())return;
+  if(new Date().getHours()<AB_HOUR)return;
+  if(abLast()===today())return;
+  if(!db.parties.length&&!db.txns.length)return;
+  backupNow();toast('Daily backup downloaded: '+abName(today()));
+  if(view==='data')render();
+}
+setInterval(autoBackup,60*1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoBackup()});
 function exportAllXl(){xlDownload([
   {name:'Lenders',rows:db.parties.map(p=>{const s=stats(p.id);return {Name:p.name,Phone:p.phone,Address:p.address,Borrowed:s.liya,Repaid:s.wapsi,Balance:s.bal}})},
   {name:'Entries',rows:sortTx(db.txns).map(t=>({Date:t.date,Lender:pname(t.partyId),Type:t.type==='liya'?'Borrowed':'Repaid',Amount:+t.amount,DueDate:t.due,Mode:t.mode,Note:t.note}))}],'Al Qadir udhaar data '+today())}
@@ -840,7 +866,7 @@ const MAN=[
  <div class="tip">Report ke upar company ka logo, naam aur principal logo (agar lagaya ho) aata hai. Neeche "Prepared by" aur "Signature" ki jagah hoti hai.</div>`],
  ['Excel export aur backup','export',`<ol><li>Menu se <b>Import / Export</b> kholein.</li><li><span class="kbd">All data to Excel</span>: sara data Excel file mein download ho jata hai (Lenders aur Entries sheets).</li>
  <li><span class="kbd">Backup (JSON)</span>: poore system ki backup file. Isay USB ya Google Drive mein sambhal kar rakhein.</li></ol>
- <div class="tip">Data online mehfooz hai, phir bhi mahine mein kam se kam ek dafa JSON backup le kar alag sambhal lein.</div>`],
+ <div class="tip"><b>Daily auto backup:</b> roz <b>shaam 7 baje</b> agar system khula ho to backup file (misal <b>Al-Qadir-Traders-backup-2026-10-13.json</b>) khud Downloads folder mein aa jati hai. 7 baje system band ho to 7 baje ke baad jab pehli dafa khulega tab file banegi. Ye setting Import / Export → <b>Daily auto backup</b> mein on/off hoti hai. Agar Chrome "multiple files download" ki ijazat maange to <b>Allow</b> dabayein. Jis din 7 baje ke baad system na khola jaye us din backup nahi banta. In files ko kabhi kabhi USB ya Google Drive mein copy kar lein.</div>`],
  ['Excel se data import karna','import',`<ol><li><span class="kbd">Download Excel template</span> dabayein.</li>
  <li>Template mein <b>Lenders</b> sheet: Name, Phone, Address. <b>Entries</b> sheet: Date, Lender, Type, Amount, DueDate, Mode, Note.</li>
  <li>Type mein <b>Borrowed</b> ya <b>Repaid</b> likhein. Date ka format 2026-10-11 ya 11-10-2026 dono chalte hain.</li>
@@ -1054,7 +1080,7 @@ function startData() {
       welcomeName(); $('#wNote').textContent = 'READY · OPENING';
       setTimeout(() => { if (!space) return; FB.ready = true;
         if (newBiz && role === 'owner') FB.sync();
-        newBiz = ''; showScreen('app'); render(); netStatus(); }, 700);
+        newBiz = ''; showScreen('app'); render(); netStatus(); setTimeout(autoBackup, 1500); }, 700);
     } else liveRender(); };
   unsubs.push(onSnapshot(col('parties'), snap => {
     mergeList(db.parties, snap.docs); synced.parties = new Map(db.parties.map(o => [o.id, stable(o)]));
