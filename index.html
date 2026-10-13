@@ -479,18 +479,21 @@ function bulkWire(){
     [t,'Malik Shahid','Borrowed',150000,addDays(t,15),'Cash','Warehouse rent'],
     [t,'Haji Aslam Traders','Repaid',200000,'','Bank','First instalment'],
     [t,'Bilal Wholesale','Borrowed',300000,addDays(t,45),'Cheque','Cheque no. 004512']];
-    fileDownload('﻿'+lines.map(r=>r.map(csvCell).join(',')).join('\r\n'),'udhaar-bulk-example.csv','text/csv')};
+    fileDownload('﻿'+lines.map(r=>r.map(csvCell).join(',')).join('\r\n'),'udhaar-bulk-example.csv','application/octet-stream')};
   $('#csvFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
-    r.onload=()=>{const rows=parseCSV(String(r.result).replace(/^﻿/,''));e.target.value='';
+    r.onload=()=>{const txt=String(r.result).replace(/^﻿/,''),first=txt.split(/\r?\n/)[0]||'';
+      const rows=parseCSV(txt,(first.split(';').length>first.split(',').length)?';':',');e.target.value='';
       if(rows.length<2)return toast('The CSV file has no data rows');
       const h=rows[0].map(x=>x.toLowerCase().replace(/[\s_]/g,''));const ix=(...k)=>h.findIndex(x=>k.includes(x));
       const c={d:ix('date'),l:ix('lender','party','name'),t:ix('type'),a:ix('amount'),u:ix('duedate','due'),m:ix('mode'),n:ix('note','notes')};
       if(c.l<0||c.a<0)return toast('CSV must have Lender and Amount columns. Use the example file');
-      syncBulk();bulkRows=bulkRows.filter(x=>x.lender.trim()||x.amount);let n=0;
+      syncBulk();bulkRows=bulkRows.filter(x=>x.lender.trim()||x.amount);let n=0,noDate=0;
+      const ord=dateOrder(rows.slice(1).flatMap(v=>[v[c.d],v[c.u]]));
       rows.slice(1).forEach(v=>{const g=i=>i<0?'':String(v[i]??'').trim();if(!v.some(x=>String(x).trim()))return;
         const type=/repa|wap|ret|paid/i.test(g(c.t))?'wapsi':'liya';
-        bulkRows.push({lender:g(c.l),type,date:normDate(g(c.d)),amount:g(c.a).replace(/[^\d.]/g,''),due:type==='liya'?normDate(g(c.u)):'',mode:['Cash','Bank','Cheque','Online'].find(m=>m.toLowerCase()===g(c.m).toLowerCase())||'Cash',note:g(c.n)});n++});
-      render();toast(`${n} rows loaded from CSV. Check them and click Save all entries`)};
+        const dt=normDate(g(c.d),ord);if(!dt)noDate++;
+        bulkRows.push({lender:g(c.l),type,date:dt,amount:g(c.a).replace(/[^\d.]/g,''),due:type==='liya'?normDate(g(c.u),ord):'',mode:['Cash','Bank','Cheque','Online'].find(m=>m.toLowerCase()===g(c.m).toLowerCase())||'Cash',note:g(c.n)});n++});
+      render();toast(noDate?`${n} rows loaded. ${noDate} rows have a date that could not be read: fill those dates before saving`:`${n} rows loaded from CSV with their dates. Check them and click Save all entries`)};
     r.readAsText(f)};
   $('#bSave').onclick=()=>{
     syncBulk();const trs=document.querySelectorAll('#bulkBody tr');let bad=0;const ok=[];
@@ -509,10 +512,10 @@ function bulkWire(){
   tot();
 }
 function csvCell(v){v=String(v??'');return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v}
-function parseCSV(s){const out=[];let row=[],cell='',q=false;
+function parseCSV(s,sep=','){const out=[];let row=[],cell='',q=false;
   for(let i=0;i<s.length;i++){const ch=s[i];
     if(q){if(ch==='"'){if(s[i+1]==='"'){cell+='"';i++}else q=false}else cell+=ch}
-    else if(ch==='"')q=true;else if(ch===','){row.push(cell);cell=''}
+    else if(ch==='"')q=true;else if(ch===sep){row.push(cell);cell=''}
     else if(ch==='\n'||ch==='\r'){if(ch==='\r'&&s[i+1]==='\n')i++;row.push(cell);out.push(row);row=[];cell=''}
     else cell+=ch}
   if(cell!==''||row.length){row.push(cell);out.push(row)}return out}
@@ -753,9 +756,28 @@ function exportAllXl(){xlDownload([
   {name:'Lenders',rows:db.parties.map(p=>{const s=stats(p.id);return {Name:p.name,Phone:p.phone,Address:p.address,Borrowed:s.liya,Repaid:s.wapsi,Balance:s.bal}})},
   {name:'Entries',rows:sortTx(db.txns).map(t=>({Date:t.date,Lender:pname(t.partyId),Type:t.type==='liya'?'Borrowed':'Repaid',Amount:+t.amount,DueDate:t.due,Mode:t.mode,Note:t.note}))}],'Al Qadir udhaar data '+today())}
 function templateXl(){xlDownload([{name:'Lenders',rows:[{Name:'Sample Lender',Phone:'0300-0000000',Address:'Rawalpindi'}]},{name:'Entries',rows:[{Date:today(),Lender:'Sample Lender',Type:'Borrowed',Amount:100000,DueDate:addDays(today(),30),Mode:'Cash',Note:''},{Date:today(),Lender:'Sample Lender',Type:'Repaid',Amount:50000,DueDate:'',Mode:'Bank',Note:''}]}],'Udhaar import template')}
-function normDate(v){if(!v)return '';if(v instanceof Date){const d=new Date(v);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,10)}
-  const s=String(v).trim();let m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);if(m)return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
-  m=s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/);if(m)return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;return ''}
+/* Reads the date formats Excel and people commonly write:
+   2026-10-13 · 13-10-2026 · 13/10/26 · 10/13/2026 · 13-Oct-26 · 13 October 2026 · Oct 13, 2026 · Excel serial numbers.
+   order 'dmy' or 'mdy' decides 05/06/2026 style dates; 'dmy' (Pakistan) is the default. */
+const MON={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+function ymd(y,m,d){y=+y;m=+m;d=+d;if(y<100)y+=2000;
+  if(!(y>1900&&y<2200&&m>=1&&m<=12&&d>=1&&d<=31))return '';
+  const t=new Date(y,m-1,d);if(t.getMonth()!==m-1)return '';
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
+function normDate(v,order='dmy'){if(v===null||v===undefined||v==='')return '';
+  if(v instanceof Date){if(isNaN(v))return '';const d=new Date(v);d.setMinutes(d.getMinutes()-d.getTimezoneOffset());return d.toISOString().slice(0,10)}
+  let s=String(v).trim().replace(/^"|"$/g,'').replace(/[T\s]+\d{1,2}:\d{2}.*$/,'').trim();if(!s)return '';
+  let m;
+  if(/^\d{5}(\.\d+)?$/.test(s)){const d=new Date(Date.UTC(1899,11,30)+Math.floor(+s)*864e5);return ymd(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate())}
+  if(m=s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})$/))return ymd(m[1],m[2],m[3]);
+  if(m=s.match(/^(\d{1,2})[-\/. ]+([A-Za-z]{3,9})\.?[-\/., ]+(\d{2,4})$/)){const mo=MON[m[2].toLowerCase().slice(0,m[2].toLowerCase().startsWith('sept')?4:3)];return mo?ymd(m[3],mo,m[1]):''}
+  if(m=s.match(/^([A-Za-z]{3,9})\.?[-\/. ]+(\d{1,2})(?:st|nd|rd|th)?,?[-\/. ]+(\d{2,4})$/)){const mo=MON[m[1].toLowerCase().slice(0,3)];return mo?ymd(m[3],mo,m[2]):''}
+  if(m=s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})$/)){const a=+m[1],b=+m[2];
+    if(a>12)return ymd(m[3],b,a);if(b>12)return ymd(m[3],a,b);
+    return order==='mdy'?ymd(m[3],a,b):ymd(m[3],b,a)}
+  return ''}
+/* Looks at a whole column: if any date like 10/13/2026 appears, the file is month-first */
+function dateOrder(vals){let mdy=0,dmy=0;vals.forEach(v=>{const m=String(v||'').trim().match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.]\d{2,4}/);if(!m)return;if(+m[1]>12)dmy++;else if(+m[2]>12)mdy++});return mdy>dmy?'mdy':'dmy'}
 function importXl(buf){
   if(typeof XLSX==='undefined')return toast('Excel library did not load');
   try{const wb=XLSX.read(buf,{type:'array',cellDates:true});let np=0,nt=0,skip=0;
