@@ -643,7 +643,7 @@ V.ledger=()=>{
 A.ledger=()=>{const f=()=>go('ledger',{pid:$('#lP').value,from:$('#lF').value,to:$('#lT').value});$('#lGo').onclick=f;$('#lP').onchange=f};
 
 /* ---------- Reports ---------- */
-V.reports=()=>{const r=ctx.r||(ctx.r={t:'summary',p:'',f:'',to:today()});const asOfType=r.t==='summary'||r.t==='overdue';
+V.reports=()=>{const r=ctx.r||(ctx.r={t:'summary',p:'',f:'',to:today(),c:true});const asOfType=r.t==='summary'||r.t==='overdue';const clrType=r.t==='summary'||r.t==='entries';
   return head('Reports / PDF','Choose a report, click Print / PDF, then pick "Save as PDF"')+`
   <div class="panel"><div class="row">
     <div class="f" style="flex:1 1 220px"><label for="rT">Report</label><select id="rT">
@@ -652,36 +652,38 @@ V.reports=()=>{const r=ctx.r||(ctx.r={t:'summary',p:'',f:'',to:today()});const a
     <div class="f" ${asOfType?'hidden':''}><label for="rF">From</label><input type="date" id="rF" value="${r.f}"></div>
     <div class="f"><label for="rTo">${asOfType?'Balance as of':'To'}</label><input type="date" id="rTo" value="${r.to}"></div>
   </div>
+  <label class="chk" style="margin-top:12px" ${clrType?'':'hidden'}><input type="checkbox" id="rC" ${r.c!==false?'checked':''}> Include cleared lenders (balance 0)</label>
   <div class="row" style="margin-top:12px"><button class="btn" id="rView">Preview</button><button class="btn pri" id="rPrint">Print / PDF</button><button class="btn" id="rXl">Excel</button></div></div>
   <div class="panel" style="margin-top:16px" id="rOut"></div>`};
 A.reports=()=>{
-  const read=()=>{ctx.r={t:$('#rT').value,p:$('#rP').value,f:$('#rF').value,to:$('#rTo').value};return ctx.r};
-  const build=(act)=>{const r=read();return buildReport(r.t,r.p,r.f,r.to,act)};
+  const read=()=>{ctx.r={t:$('#rT').value,p:$('#rP').value,f:$('#rF').value,to:$('#rTo').value,c:$('#rC').checked};return ctx.r};
+  const build=(act)=>{const r=read();return buildReport(r.t,r.p,r.f,r.to,act,r.c)};
   const show=()=>{const r=build(true);$('#rOut').innerHTML=r?`<h2>${r.title}</h2><div class="sub" style="margin-bottom:10px">${r.sub}</div><div class="tbl-wrap">${r.html}</div>`:'<div class="empty">Select a lender for the ledger statement</div>'};
   $('#rT').onchange=()=>{read();render()};
-  ['rP','rF','rTo'].forEach(i=>$('#'+i).onchange=show);$('#rView').onclick=show;
+  ['rP','rF','rTo','rC'].forEach(i=>$('#'+i).onchange=show);$('#rView').onclick=show;
   $('#rPrint').onclick=()=>{const r=build();if(!r)return toast('Select a lender');printDoc(r.title,r.sub,r.html,r.summary)};
   $('#rXl').onclick=()=>{const r=build();if(!r)return toast('Select a lender');xlDownload([{name:'Report',rows:r.xl}],r.title)};
   show();
 };
-function buildReport(type,pid,from,to,act=false){
+function buildReport(type,pid,from,to,act=false,incCleared=true){
   const range=`${from?fd(from):'Start'} to ${to?fd(to):'Today'}`;
   if(type==='summary'||type==='overdue'){
     const ao=to||today();
     let list=db.parties.filter(p=>!pid||p.id===pid).map(p=>({p,s:stats(p.id,ao)}));
     if(type==='overdue')list=list.filter(x=>x.s.bal>0).sort((a,b)=>b.s.overdue-a.s.overdue||(a.s.nextDue||'9').localeCompare(b.s.nextDue||'9'));
-    else list.sort((a,b)=>b.s.bal-a.s.bal);
+    else{if(!incCleared)list=list.filter(x=>x.s.bal>0);list.sort((a,b)=>b.s.bal-a.s.bal)}
     const T={l:0,w:0,b:0,o:0};list.forEach(({s})=>{T.l+=s.liya;T.w+=s.wapsi;T.b+=s.bal;T.o+=s.overdue});
     const html=`<table><thead><tr><th>#</th><th>Lender</th><th>Phone</th>${type==='overdue'?'<th>Next due</th><th class="num">Overdue</th>':'<th class="num">Borrowed</th><th class="num">Repaid</th>'}<th class="num">Balance</th></tr></thead><tbody>
     ${list.map(({p,s},i)=>`<tr><td>${i+1}</td><td>${esc(p.name)}</td><td>${esc(p.phone)}</td>${type==='overdue'?`<td>${fd(s.nextDue)}</td><td class="num">${rs(s.overdue)}</td>`:`<td class="num">${rs(s.liya)}</td><td class="num">${rs(s.wapsi)}</td>`}<td class="num">${rs(s.bal)}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">Nothing found</td></tr>'}
     </tbody><tfoot><tr><td></td><td>Total</td><td></td>${type==='overdue'?`<td></td><td class="num">${rs(T.o)}</td>`:`<td class="num">${rs(T.l)}</td><td class="num">${rs(T.w)}</td>`}<td class="num">${rs(T.b)}</td></tr></tfoot></table>`;
     const xl=list.map(({p,s},i)=>type==='overdue'?{'#':i+1,Lender:p.name,Phone:p.phone,'Next Due':fd(s.nextDue),Overdue:s.overdue,Balance:s.bal}:{'#':i+1,Lender:p.name,Phone:p.phone,Borrowed:s.liya,Repaid:s.wapsi,Balance:s.bal});
-    return {title:type==='overdue'?'Overdue / Upcoming Repayments':'Lender Balance Summary',sub:`Balance as of ${fd(ao)}`,html,xl,summary:[['Total payable',rs(T.b)],['Overdue',rs(T.o)],['Lenders',list.length]]};
+    return {title:type==='overdue'?'Overdue / Upcoming Repayments':'Lender Balance Summary',sub:`Balance as of ${fd(ao)}`+(type==='summary'&&!incCleared?' · cleared lenders not included':''),html,xl,summary:[['Total payable',rs(T.b)],['Overdue',rs(T.o)],['Lenders',list.length]]};
   }
   if(type==='entries'){
-    const list=sortTx(db.txns.filter(t=>(!pid||t.partyId===pid)&&(!from||t.date>=from)&&(!to||t.date<=to)));
+    const open=new Set();if(!incCleared)db.parties.forEach(p=>{if(stats(p.id,to||today()).bal>0)open.add(p.id)});
+    const list=sortTx(db.txns.filter(t=>(!pid||t.partyId===pid)&&(!from||t.date>=from)&&(!to||t.date<=to)&&(incCleared||open.has(t.partyId))));
     const L=list.filter(t=>t.type==='liya').reduce((a,t)=>a+ +t.amount,0),W=list.filter(t=>t.type==='wapsi').reduce((a,t)=>a+ +t.amount,0);
-    return {title:'Transactions Report',sub:range+(pid?' · '+esc(pname(pid)):''),html:txTable(list,!!act),
+    return {title:'Transactions Report',sub:range+(pid?' · '+esc(pname(pid)):'')+(incCleared?'':' · cleared lenders not included'),html:txTable(list,!!act),
       xl:list.map(t=>({Date:fd(t.date),Lender:pname(t.partyId),Type:t.type==='liya'?'Borrowed':'Repaid',Mode:t.mode,'Due Date':fd(t.due),Note:t.note,Amount:+t.amount})),
       summary:[['Borrowed',rs(L)],['Repaid',rs(W)],['Net',rs(L-W)],['Entries',list.length]]};
   }
@@ -868,6 +870,7 @@ const MAN=[
  <li><b>Lender balance summary:</b> har lender ka liya, wapis aur baqaya.</li><li><b>Overdue / upcoming repayments:</b> kis ko kab aur kitna dena hai.</li>
  <li><b>Transactions by date:</b> chuni hui tareekhon ki sari entries.</li><li><b>Lender ledger statement:</b> ek lender ka mukammal hisaab.</li></ul></li>
  <li>Zaroorat ho to lender aur tareekh chunein. Balance summary aur Overdue report mein <b>Balance as of</b> tareekh hoti hai: jo tareekh chunein, us din tak ka baqaya aur overdue aayega. Transactions aur Ledger mein From / To dono hoti hain.</li>
+ <li><b>Include cleared lenders (balance 0):</b> Balance summary aur Transactions report mein ye tick hota hai. Tick laga ho to jin lenders ka hisaab saaf (balance 0) ho chuka hai wo bhi report mein aate hain. Tick hata dein to sirf baqaya wale lenders aate hain. Overdue report mein cleared lenders waise bhi nahi aate.</li>
  <li><span class="kbd">Preview</span> se screen par dekh lein. Preview mein har entry ke saath Edit aur Delete hai. Print ya Excel mein ye buttons nahi aate.</li>
  <li><span class="kbd">Print / PDF</span> dabayein. Print window mein printer ki jagah <b>Save as PDF</b> chunein aur Save karein.</li></ol>
  <div class="tip">Report ke upar company ka logo, naam aur principal logo (agar lagaya ho) aata hai. Neeche "Prepared by" aur "Signature" ki jagah hoti hai.</div>`],
